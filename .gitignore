@@ -1,6 +1,9 @@
 # Salasanat ja tunnukset
 .env
 
+# Claude
+CLAUDE.md
+
 # OS
 .DS_Store
 Thumbs.db
