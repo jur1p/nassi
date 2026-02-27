@@ -1,0 +1,185 @@
+services:
+
+  # ============================================
+  # VPN Gateway - kaikki *arr-liikenne tämän läpi
+  # ============================================
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - VPN_SERVICE_PROVIDER=nordvpn
+      - VPN_TYPE=openvpn
+      - OPENVPN_USER=${NORDVPN_USER}
+      - OPENVPN_PASSWORD=${NORDVPN_PASS}
+      - SERVER_COUNTRIES=${VPN_COUNTRY:-Finland}
+      - TZ=${TZ}
+    ports:
+      # qBittorrent
+      - "${QBIT_PORT:-8080}:8080"
+      # Prowlarr
+      - "${PROWLARR_PORT:-9696}:9696"
+      # Sonarr
+      - "${SONARR_PORT:-8989}:8989"
+      # Radarr
+      - "${RADARR_PORT:-7878}:7878"
+      # Bazarr
+      - "${BAZARR_PORT:-6767}:6767"
+    volumes:
+      - /mnt/tank/apps/gluetun:/gluetun
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8000/v1/openvpn/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ============================================
+  # Torrent Client (VPN:n takana)
+  # ============================================
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - WEBUI_PORT=8080
+    volumes:
+      - /mnt/tank/apps/qbittorrent:/config
+      - /mnt/tank:/data
+    restart: unless-stopped
+
+  # ============================================
+  # Arr Stack (kaikki VPN:n takana)
+  # ============================================
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - /mnt/tank/apps/prowlarr:/config
+    restart: unless-stopped
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - /mnt/tank/apps/sonarr:/config
+      - /mnt/tank:/data
+    restart: unless-stopped
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - /mnt/tank/apps/radarr:/config
+      - /mnt/tank:/data
+    restart: unless-stopped
+
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - /mnt/tank/apps/bazarr:/config
+      - /mnt/tank:/data
+    restart: unless-stopped
+
+  # ============================================
+  # Media Server (suora verkko - ei VPN)
+  # ============================================
+  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:latest
+    container_name: jellyfin
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    ports:
+      - "${JELLYFIN_PORT:-8096}:8096"
+    volumes:
+      - /mnt/tank/apps/jellyfin:/config
+      - /mnt/tank/media:/media
+    restart: unless-stopped
+
+  # ============================================
+  # Nextcloud + tietokanta + cache
+  # ============================================
+  nextcloud-db:
+    image: mariadb:11
+    container_name: nextcloud-db
+    environment:
+      - MYSQL_ROOT_PASSWORD=${NC_DB_ROOT_PASS}
+      - MYSQL_DATABASE=nextcloud
+      - MYSQL_USER=nextcloud
+      - MYSQL_PASSWORD=${NC_DB_PASS}
+    volumes:
+      - /mnt/tank/apps/nextcloud-db:/var/lib/mysql
+    restart: unless-stopped
+    command: --transaction-isolation=READ-COMMITTED --log-bin=binlog --binlog-format=ROW
+
+  nextcloud-redis:
+    image: redis:7-alpine
+    container_name: nextcloud-redis
+    restart: unless-stopped
+
+  nextcloud:
+    image: nextcloud:latest
+    container_name: nextcloud
+    depends_on:
+      - nextcloud-db
+      - nextcloud-redis
+    environment:
+      - MYSQL_HOST=nextcloud-db
+      - MYSQL_DATABASE=nextcloud
+      - MYSQL_USER=nextcloud
+      - MYSQL_PASSWORD=${NC_DB_PASS}
+      - REDIS_HOST=nextcloud-redis
+      - NEXTCLOUD_ADMIN_USER=${NC_ADMIN_USER}
+      - NEXTCLOUD_ADMIN_PASSWORD=${NC_ADMIN_PASS}
+      - NEXTCLOUD_TRUSTED_DOMAINS=${NC_TRUSTED_DOMAINS:-localhost}
+    ports:
+      - "${NEXTCLOUD_PORT:-8443}:80"
+    volumes:
+      - /mnt/tank/apps/nextcloud:/var/www/html
+      - /mnt/tank/nextcloud:/var/www/html/data
+    restart: unless-stopped

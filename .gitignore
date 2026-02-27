@@ -1,0 +1,6 @@
+# Salasanat ja tunnukset
+.env
+
+# OS
+.DS_Store
+Thumbs.db
