@@ -5,32 +5,36 @@ Kotipalvelin jossa *arr-stack NordVPN:n takana, Nextcloud, Jellyfin ja NAS.
 ## Arkkitehtuuri
 
 ```
-┌────────────────────────────────────────────────────┐
-│  TrueNAS SCALE                                     │
-│                                                    │
-│  ZFS Mirror Pool "tank" (2x 2TB → 2TB käytettävä)  │
-│                                                    │
-│  Docker Compose:                                   │
-│  ┌──────────────────────────────────────────┐      │
-│  │ gluetun (NordVPN/OpenVPN)                │      │
-│  │  ├── qbittorrent      :8080              │      │
-│  │  ├── prowlarr          :9696             │      │
-│  │  ├── sonarr            :8989             │      │
-│  │  ├── radarr            :7878             │      │
-│  │  └── bazarr            :6767             │      │
-│  ├── jellyfin             :8096             │      │
-│  ├── nextcloud            :8443             │      │
-│  │   ├── mariadb                            │      │
-│  │   └── redis                              │      │
-│  └── SMB (TrueNAS built-in)  :445           │      │
-│  └──────────────────────────────────────────┘      │
-└────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│  TrueNAS SCALE                                       │
+│                                                      │
+│  tank (2x 2TB stripe → 4TB käytettävä)               │
+│    → apps, media, downloads, nextcloud, shared       │
+│                                                      │
+│  Jatkossa: media-pool (3x 8TB RAIDZ1 → 16TB)        │
+│    → ks. expansion-guide.md                          │
+│                                                      │
+│  Docker Compose:                                     │
+│  ┌──────────────────────────────────────────┐        │
+│  │ gluetun (NordVPN/OpenVPN)                │        │
+│  │  ├── qbittorrent      :8080              │        │
+│  │  ├── prowlarr          :9696             │        │
+│  │  ├── sonarr            :8989             │        │
+│  │  ├── radarr            :7878             │        │
+│  │  └── bazarr            :6767             │        │
+│  ├── jellyfin             :8096             │        │
+│  ├── nextcloud            :8443             │        │
+│  │   ├── mariadb                            │        │
+│  │  └── redis                               │        │
+│  └── SMB (TrueNAS built-in)  :445           │        │
+│  └──────────────────────────────────────────┘        │
+└──────────────────────────────────────────────────────┘
 ```
 
 ## Vaatimukset
 
 - Kone jossa vähintään 8GB RAM (ZFS syö muistia)
-- 2x 2TB HDD (tai isompi)
+- 2x 2TB HDD
 - USB-tikku TrueNAS-asennukseen
 - USB-levy / erillinen levy backupille
 - NordVPN-tilaus
@@ -46,23 +50,24 @@ Kotipalvelin jossa *arr-stack NordVPN:n takana, Nextcloud, Jellyfin ja NAS.
    - Aseta root-salasana
 4. Bootaa TrueNAS ja avaa web-UI: `http://<palvelimen-ip>`
 
-### 2. ZFS Mirror Pool
+### 2. ZFS Pool (2x 2TB Stripe)
 
 Web-UI:ssa: **Storage → Create Pool**
 
 1. Nimi: `tank`
 2. Valitse molemmat 2TB levyt
-3. Layout: **Mirror**
+3. Layout: **Stripe**
 4. Luo pool
 
-Tämä antaa 2TB käytettävää tilaa reaaliaikaisella peilauksella.
+> **Huom**: Stripe EI tarjoa redundanssia - jos yksi levy hajoaa, kaikki
+> data menetetään. Pidä USB-backupit ajan tasalla! Redundanssi tulee
+> jatkossa media-pooliin (3x 8TB RAIDZ1), ks. [expansion-guide.md](expansion-guide.md).
 
 ### 3. Luo datasetit
 
-Katso [datasets.md](datasets.md) - luo kaikki datasetit Web-UI:sta tai shellissä:
+Katso [datasets.md](datasets.md) tai shellissä:
 
 ```bash
-# Shellistä (jos haluat nopeasti):
 zfs create tank/apps
 zfs create tank/media
 zfs create tank/media/movies
@@ -73,6 +78,9 @@ zfs create tank/downloads/complete
 zfs create tank/downloads/incomplete
 zfs create tank/nextcloud
 zfs create tank/shared
+
+zfs set atime=off tank
+zfs set recordsize=1M tank/media
 ```
 
 ### 4. Docker Compose asennus
@@ -103,7 +111,7 @@ Katso [smb-shares.md](smb-shares.md) - konfiguroi TrueNAS Web-UI:sta.
 
 Katso [backup/](backup/) - ZFS snapshot + send USB-levylle.
 
-### 7. Levyjen lisääminen
+### 7. Levyjen lisääminen (3x 8TB RAIDZ1)
 
 Katso [expansion-guide.md](expansion-guide.md).
 
@@ -123,16 +131,19 @@ Katso [expansion-guide.md](expansion-guide.md).
 ## Ensikonfigurointi palveluille
 
 ### qBittorrent
+
 1. Kirjaudu sisään (admin/adminadmin) → vaihda salasana
 2. Settings → Downloads → Default Save Path: `/data/downloads/complete`
 3. Settings → Downloads → Incomplete: `/data/downloads/incomplete`
 
 ### Prowlarr
+
 1. Lisää indexerit (torrent-sivustot)
 2. Settings → Apps → Lisää Sonarr ja Radarr
    - Osoitteena käytä `localhost` koska kaikki ovat samassa verkossa (gluetun)
 
 ### Sonarr / Radarr
+
 1. Settings → Media Management → Root Folders:
    - Sonarr: `/data/media/tv`
    - Radarr: `/data/media/movies`
@@ -146,6 +157,7 @@ Katso [expansion-guide.md](expansion-guide.md).
 2. Valitse kieliasetukset tekstityksille
 
 ### Jellyfin
+
 1. Luo admin-käyttäjä
 2. Lisää kirjastot:
    - Movies: `/media/movies`
@@ -153,7 +165,9 @@ Katso [expansion-guide.md](expansion-guide.md).
    - Music: `/media/music`
 
 ### VPN-tarkistus
+
 Tarkista että VPN toimii:
+
 ```bash
 docker exec gluetun wget -qO- https://ipinfo.io
 # Pitäisi näyttää NordVPN:n IP, EI oma IP

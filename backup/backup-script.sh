@@ -9,12 +9,18 @@
 set -euo pipefail
 
 # --- Asetukset ---
-POOL="tank"
 USB_MOUNT="/mnt/usb-backup"
-DATASETS=("apps" "nextcloud" "shared")  # Kriittiset datasetit (ei media - liian iso)
 DATE=$(date +%Y-%m-%d_%H-%M)
-KEEP_SNAPSHOTS=7    # Montako snapshotia pidetään
-KEEP_FILES_DAYS=30  # Montako päivää USB:n .zfs-tiedostoja pidetään
+KEEP_SNAPSHOTS=7
+KEEP_FILES_DAYS=30
+
+# Backupoitavat datasetit (pool/dataset)
+# Kaikki tank-poolissa koska stripe ei tarjoa redundanssia
+BACKUP_DATASETS=(
+    "tank/apps"
+    "tank/nextcloud"
+    "tank/shared"
+)
 
 # --- Logitus ---
 log_info()  { echo "[INFO]  $(date '+%H:%M:%S') $*"; }
@@ -31,22 +37,24 @@ if ! mountpoint -q "${USB_MOUNT}"; then
 fi
 
 # --- Snapshot + Send jokainen dataset ---
-for DS in "${DATASETS[@]}"; do
-    FULL="${POOL}/${DS}"
+for FULL in "${BACKUP_DATASETS[@]}"; do
+    DS_DIR="${FULL//\//-}"
     SNAP="${FULL}@backup-${DATE}"
-    DEST="${USB_MOUNT}/${DS}"
+    DEST="${USB_MOUNT}/${DS_DIR}"
     TRACKER="${DEST}/latest-snapshot.txt"
+
+    if ! zfs list -H -o name "${FULL}" >/dev/null 2>&1; then
+        log_warn "Dataset ${FULL} ei löydy, ohitetaan"
+        continue
+    fi
 
     log_info "Snapshot: ${SNAP}"
     zfs snapshot -r "${SNAP}"
 
-    # Luo kohdekansio
     mkdir -p "${DEST}"
 
-    # Tarkista onko edellinen backup olemassa inkrementaalia varten
     if [ -f "${TRACKER}" ]; then
         PREV=$(cat "${TRACKER}")
-        # Varmista että edellinen snapshot on vielä olemassa
         if zfs list -t snapshot -H -o name "${PREV}" >/dev/null 2>&1; then
             log_info "Inkrementaalinen send: ${PREV} → ${SNAP}"
             zfs send -i "${PREV}" "${SNAP}" > "${DEST}/incr-${DATE}.zfs"
@@ -59,19 +67,18 @@ for DS in "${DATASETS[@]}"; do
         zfs send "${SNAP}" > "${DEST}/full-${DATE}.zfs"
     fi
 
-    # Merkitse viimeisin onnistunut snapshot
     echo "${SNAP}" > "${TRACKER}"
-
-    log_info "${DS} backup valmis"
+    log_info "${FULL} backup valmis"
 done
 
 # --- Siivoa vanhat snapshotit ---
 log_info "Siivotaan vanhoja snapshoteja..."
 
-for DS in "${DATASETS[@]}"; do
-    FULL="${POOL}/${DS}"
+for FULL in "${BACKUP_DATASETS[@]}"; do
+    if ! zfs list -H -o name "${FULL}" >/dev/null 2>&1; then
+        continue
+    fi
 
-    # Listaa backup-snapshotit vanhimmasta uusimpaan
     SNAPS=$(zfs list -t snapshot -o name -s creation -H "${FULL}" 2>/dev/null \
         | grep "@backup-" || true)
 
